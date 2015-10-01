@@ -54,7 +54,7 @@ func (ks keys) Len() int           { return len(ks) }
 func (ks keys) Less(i, j int) bool { return ks[i].Less(ks[j]) }
 func (ks keys) Swap(i, j int)      { ks[i], ks[j] = ks[j], ks[i] }
 func (ks keys) Search(x key) int {
-	return sort.Search(len(ks), func(i int) bool { return x.Less(ks[i]) })
+	return sort.Search(len(ks), func(i int) bool { return ks[i].Compare(x) >= 0 })
 }
 
 func (ks *keys) InsertAt(i int, k key) {
@@ -95,10 +95,12 @@ type node interface {
 
 	Split() (key, node, node)
 	Merge(key, node) key
-	Rebalance(key, node) (key, key)
+	RebalanceToHead(node) key
+	RebalanceToTail(node) key
 
 	IsFull() bool
 	IsEmpty() bool
+	CanMerge(node) bool
 }
 
 type nodes []node
@@ -106,9 +108,6 @@ type nodes []node
 func (ns nodes) Len() int           { return len(ns) }
 func (ns nodes) Less(i, j int) bool { return ns[i].Less(ns[j]) }
 func (ns nodes) Swap(i, j int)      { ns[i], ns[j] = ns[j], ns[i] }
-func (ns nodes) Search(x node) int {
-	return sort.Search(len(ns), func(i int) bool { return x.Less(ns[i]) })
-}
 
 func (ns *nodes) InsertAt(i int, n node) {
 	nodes := *ns
@@ -143,10 +142,10 @@ type internalNode struct {
 	nodes nodes
 }
 
-func newInternalNode(d uint) *internalNode {
+func newInternalNode(b uint) *internalNode {
 	return &internalNode{
-		keys:  make(keys, 0, d),
-		nodes: make(nodes, 0, d+1),
+		keys:  make(keys, 0, b),
+		nodes: make(nodes, 0, b+1),
 	}
 }
 
@@ -174,8 +173,10 @@ func (n *internalNode) searchKNIndex(k key) (int, int) {
 
 func (n *internalNode) Insert(k key) {
 	kIdx, nIdx := n.searchKNIndex(k)
+
 	child := n.nodes[nIdx]
 
+	child.Insert(k)
 	if child.IsFull() {
 		key, left, right := child.Split()
 		n.keys.InsertAt(n.Search(key), key)
@@ -188,14 +189,15 @@ func (n *internalNode) Insert(k key) {
 			kIdx++
 		}
 	}
-
-	child.Insert(k)
 }
 
 func (n *internalNode) Remove(k key) {
 	defer func() {
 		if r := recover(); r != nil {
+			fmt.Println("!!! PANIC !!!")
 			drawChildren(0, n)
+			fmt.Println("!!! PANIC !!!")
+			panic(r)
 		}
 	}()
 	curKIdx, curNIdx := n.searchKNIndex(k)
@@ -204,77 +206,78 @@ func (n *internalNode) Remove(k key) {
 	if k.Compare(n.keys[curKIdx]) == 0 {
 		n.keys[curKIdx] = child.GetLowestLeaf()
 	}
+	if len(n.nodes) == 1 {
+		return
+	}
 	if child.IsEmpty() {
+		fmt.Println("Starting merge/rebalance check")
+		drawChildren(0, n)
 		switch {
 		case curNIdx == len(n.nodes)-1: // At the end
 			fmt.Println("end")
-			if n.nodes[curNIdx-1].IsEmpty() { // Merge case:
+			if child.CanMerge(n.nodes[curNIdx-1]) { // Merge case:
 				fmt.Println("merge")
-				n.nodes[curNIdx-1].Merge(n.keys[curKIdx], n.nodes[curNIdx])
+				n.nodes[curNIdx-1].Merge(n.keys[curKIdx], child)
 				n.nodes.RemoveAt(curNIdx)
-				switch n.nodes[curNIdx-1].(type) {
+				// Reduce the current node and key index since the trailing items were
+				// just deleted
+				curNIdx--
+				// Don't delete the last key
+				if len(n.keys) > 1 {
+					n.keys.RemoveAt(curKIdx)
+
+					curKIdx--
+				}
+
+				switch n.nodes[curNIdx].(type) {
 				case *leafNode:
-					n.keys.RemoveAt(len(n.keys) - 1)
+					fmt.Println("leaf", curKIdx)
+					n.keys[curKIdx] = n.nodes[curNIdx].Keys().First()
 				case *internalNode:
-					nextLowest := n.nodes[len(n.nodes)-1].GetLowestLeaf()
-					if nextLowest.Less(n.keys[0]) {
-						n.keys[len(n.keys)-1] = nextLowest
-					} else {
-						n.keys.RemoveAt(len(n.keys) - 1)
-					}
 				}
 			} else {
-
 				fmt.Println("rebalance")
-				drawChildren(0, n)
+				n.keys[curKIdx] = child.RebalanceToHead(n.nodes[curNIdx-1])
 			}
 		case curKIdx == 0 && curNIdx == 0: // At the beginning
 			fmt.Println("start")
-			if n.nodes[1].IsEmpty() { // Merge case:
+			if child.CanMerge(n.nodes[1]) { // Merge case:
 				fmt.Println("merge")
 				n.nodes[1].Merge(n.keys[0], n.nodes[0])
 				n.nodes.RemoveAt(0)
-				switch n.nodes[0].(type) {
-				case *leafNode:
+				if len(n.keys) > 1 {
 					n.keys.RemoveAt(0)
-				case *internalNode:
-					nextLowest := n.nodes[1].GetLowestLeaf()
-					if nextLowest.Less(n.keys[0]) {
-						n.keys[0] = nextLowest
-					} else {
-						n.keys.RemoveAt(0)
-					}
 				}
 			} else {
 				fmt.Println("rebalance")
-				drawChildren(0, n)
+				n.keys[curKIdx] = child.RebalanceToTail(n.nodes[curNIdx+1])
 			}
 		default: // In the middle
 			fmt.Println("middle")
-			if n.nodes[curNIdx+1].IsEmpty() { // Merge case:
+			if child.CanMerge(n.nodes[curNIdx+1]) { // Merge case:
 				fmt.Println("merge")
-				n.nodes[curNIdx].Merge(n.keys[curKIdx], n.nodes[curNIdx+1])
+				child.Merge(n.keys[curKIdx], n.nodes[curNIdx+1])
 				n.nodes.RemoveAt(curNIdx + 1)
-				switch n.nodes[curNIdx-1].(type) {
+				// Don't delete the last key
+				if len(n.keys) > 1 {
+					n.keys.RemoveAt(curKIdx + 1)
+				}
+
+				switch n.nodes[curNIdx].(type) {
 				case *leafNode:
-					fmt.Println("remove leaf key")
-					n.keys.RemoveAt(curKIdx)
+					fmt.Println("leaf", curKIdx)
+					n.keys[curKIdx] = n.nodes[curNIdx].Keys().First()
 				case *internalNode:
 					nextLowest := n.nodes[curNIdx].GetLowestLeaf()
-					if nextLowest.Less(n.keys[0]) {
-						fmt.Println("find lowest leaf key")
-						n.keys[curKIdx] = nextLowest
-					} else {
-						fmt.Println("remove key")
-						n.keys.RemoveAt(curKIdx)
-					}
+					n.keys[curKIdx] = nextLowest
 				}
 			} else {
 				fmt.Println("rebalance")
-				drawChildren(0, n)
+				n.keys[curKIdx] = child.RebalanceToTail(n.nodes[curNIdx+1])
 			}
 		}
-	} else {
+		drawChildren(0, n)
+		fmt.Println("finish remove")
 	}
 }
 
@@ -301,7 +304,7 @@ func (n *internalNode) Less(o node) bool {
 
 func (n *internalNode) Split() (key, node, node) {
 	if len(n.keys) < 3 {
-		return nil, nil, nil
+		panic("Internal node too small to split")
 	}
 
 	mid := len(n.keys) / 2
@@ -330,31 +333,54 @@ func (n *internalNode) Split() (key, node, node) {
 
 func (n *internalNode) Merge(parent key, toMerge node) key {
 	mn := toMerge.(*internalNode)
+	fmt.Println(parent, n.keys[0], mn.keys[0])
 	if n.Less(mn) {
-		n.keys.InsertAt(n.keys.Search(parent), parent)
+		if parent.Less(mn.keys[0]) {
+			n.keys.InsertAt(n.keys.Search(parent), parent)
+		}
 		n.keys = append(n.keys, mn.keys...)
 		n.nodes = append(n.nodes, mn.nodes...)
 	} else {
-		n.keys.InsertAt(n.keys.Search(parent), parent)
-		n.keys = append(mn.keys, n.keys...)
-		n.nodes = append(mn.nodes, n.nodes...)
+		if parent.Less(n.keys[0]) {
+			n.keys.InsertAt(n.keys.Search(parent), parent)
+		}
+		n.keys = append(n.keys[:0], append(mn.keys, n.keys...)...)
+		n.nodes = append(n.nodes[:0], append(mn.nodes, n.nodes...)...)
 	}
 	return n.keys.First()
 }
 
-func (n *internalNode) Rebalance(parent key, other node) (key, key) {
+// Rebalances to the tail of this node, removing items from the head of other.
+func (n *internalNode) RebalanceToTail(other node) key {
 	mn := other.(*internalNode)
-	if n.Less(mn) {
-		moveIdx := (len(mn.keys) - cap(mn.keys)/2) / 2
-		n.keys = append(n.keys, mn.keys[:moveIdx]...)
-		mn.keys = mn.keys[moveIdx:]
-		return n.keys.First(), mn.keys.First()
-	} else {
-		moveIdx := (len(n.keys) - cap(n.keys)/2) / 2
-		mn.keys = append(mn.keys, n.keys[:moveIdx]...)
-		n.keys = n.keys[moveIdx:]
-		return mn.keys.First(), n.keys.First()
-	}
+	moveIdx := len(mn.keys) - 1 - (len(mn.keys) - cap(mn.keys)/2)
+	fmt.Println("in internal rebalance")
+	// drop 1 key and return it.
+	keyRight := mn.keys[moveIdx-1]
+	fmt.Println("to tail", keyRight)
+	n.keys = append(append(n.keys, mn.GetLowestLeaf()), mn.keys[:moveIdx-1]...)
+	n.nodes = append(n.nodes, mn.nodes[:moveIdx]...)
+
+	mn.keys = append(mn.keys[:0], mn.keys[moveIdx:]...)
+	mn.nodes = append(mn.nodes[:0], mn.nodes[moveIdx:]...)
+	fmt.Println(keyRight)
+	return keyRight
+}
+
+// Rebalances to the head of this node, removing items from the tail of other.
+func (n *internalNode) RebalanceToHead(other node) key {
+	mn := other.(*internalNode)
+	moveIdx := len(mn.keys) - (len(mn.keys) - cap(mn.keys)/2)
+	fmt.Println("in internal rebalance")
+	keyLeft := mn.keys[moveIdx-1]
+	fmt.Println("to head", keyLeft)
+	n.keys = append(n.keys[:0], append(append(mn.keys[moveIdx:], n.GetLowestLeaf()), n.keys...)...)
+	n.nodes = append(n.nodes[:0], append(mn.nodes[moveIdx:], n.nodes...)...)
+
+	mn.keys = append(mn.keys[:0], mn.keys[:moveIdx-1]...)
+	mn.nodes = append(mn.nodes[:0], mn.nodes[:moveIdx]...)
+	fmt.Println(keyLeft)
+	return keyLeft
 }
 
 func (n *internalNode) IsFull() bool {
@@ -365,14 +391,27 @@ func (n *internalNode) IsEmpty() bool {
 	return len(n.keys) <= cap(n.keys)/2
 }
 
+func (n *internalNode) CanMerge(other node) bool {
+	if o, ok := other.(*internalNode); ok {
+		return len(n.keys)+len(o.keys) <= cap(n.keys) && len(n.nodes)+len(o.nodes) <= cap(n.nodes)
+	} else {
+		return false
+	}
+	fmt.Println("internal isEmpty: keys:", len(n.keys), "/", cap(n.keys),
+		"nodes:", len(n.nodes), "/", cap(n.nodes),
+		"empty", len(n.keys) <= cap(n.keys)/2)
+
+	return len(n.keys) <= cap(n.keys)/2 && len(n.nodes) < cap(n.nodes)/2
+}
+
 type leafNode struct {
 	keys           keys
 	next, previous *leafNode
 }
 
-func newLeafNode(d uint) *leafNode {
+func newLeafNode(b uint) *leafNode {
 	return &leafNode{
-		keys: make(keys, 0, d),
+		keys: make(keys, 0, b),
 	}
 }
 
@@ -381,14 +420,13 @@ func (n *leafNode) Insert(k key) {
 }
 
 func (n *leafNode) Remove(k key) {
+	fmt.Println("remove leaf key", k)
 	i := n.keys.Search(k)
 
-	if i == len(n.keys) {
-		if k.Compare(n.keys[i-1]) == 0 {
-			n.keys.RemoveAt(i - 1)
+	if i < len(n.keys) {
+		if k.Compare(n.keys[i]) == 0 {
+			n.keys.RemoveAt(i)
 		}
-	} else {
-		n.keys.RemoveAt(i)
 	}
 }
 
@@ -453,19 +491,31 @@ func (n *leafNode) Merge(parent key, toMerge node) key {
 	return n.keys.First()
 }
 
-func (n *leafNode) Rebalance(parent key, other node) (key, key) {
+// Rebalances to the tail of this node, removing items from the head of other.
+func (n *leafNode) RebalanceToTail(other node) key {
 	mn := other.(*leafNode)
-	if n.Less(mn) {
-		moveIdx := (len(mn.keys) - cap(mn.keys)/2) / 2
-		n.keys = append(n.keys, mn.keys[:moveIdx]...)
-		mn.keys = mn.keys[moveIdx:]
-		return n.keys.First(), mn.keys.First()
-	} else {
-		moveIdx := (len(n.keys) - cap(n.keys)/2) / 2
-		mn.keys = append(mn.keys, n.keys[:moveIdx]...)
-		n.keys = n.keys[moveIdx:]
-		return mn.keys.First(), n.keys.First()
-	}
+	moveIdx := len(mn.keys) - 1 - (len(mn.keys) - cap(mn.keys)/2)
+	fmt.Println("in leaf rebalance")
+	fmt.Println("to tail")
+	keyRight := mn.keys[moveIdx]
+	n.keys = append(n.keys, mn.keys[:moveIdx]...)
+
+	mn.keys = append(mn.keys[:0], mn.keys[moveIdx:]...)
+	return keyRight
+}
+
+// Rebalances to the head of this node, removing items from the tail of other.
+func (n *leafNode) RebalanceToHead(other node) key {
+	mn := other.(*leafNode)
+	moveIdx := len(mn.keys) - (len(mn.keys) - cap(mn.keys)/2)
+	fmt.Println("in leaf rebalance")
+	fmt.Println("to head")
+	keyLeft := mn.keys[moveIdx]
+
+	n.keys = append(n.keys[:0], append(mn.keys[moveIdx:], n.keys...)...)
+
+	mn.keys = append(mn.keys[:0], mn.keys[:moveIdx]...)
+	return keyLeft
 }
 
 func (n *leafNode) IsFull() bool {
@@ -474,4 +524,12 @@ func (n *leafNode) IsFull() bool {
 
 func (n *leafNode) IsEmpty() bool {
 	return len(n.keys) <= cap(n.keys)/2
+}
+
+func (n *leafNode) CanMerge(other node) bool {
+	if o, ok := other.(*leafNode); ok {
+		return len(n.keys)+len(o.keys) <= cap(n.keys)
+	} else {
+		return false
+	}
 }
