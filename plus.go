@@ -176,7 +176,6 @@ func (n *internalNode) Insert(k key) {
 
 	child := n.nodes[nIdx]
 
-	child.Insert(k)
 	if child.IsFull() {
 		key, left, right := child.Split()
 		n.keys.InsertAt(n.Search(key), key)
@@ -189,13 +188,15 @@ func (n *internalNode) Insert(k key) {
 			kIdx++
 		}
 	}
+
+	child.Insert(k)
 }
 
 func (n *internalNode) Remove(k key) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Println("!!! PANIC !!!")
-			drawChildren(0, n)
+			//drawChildren(0, n)
 			fmt.Println("!!! PANIC !!!")
 			panic(r)
 		}
@@ -211,7 +212,6 @@ func (n *internalNode) Remove(k key) {
 	}
 	if child.IsEmpty() {
 		fmt.Println("Starting merge/rebalance check")
-		drawChildren(0, n)
 		switch {
 		case curNIdx == len(n.nodes)-1: // At the end
 			fmt.Println("end")
@@ -276,7 +276,6 @@ func (n *internalNode) Remove(k key) {
 				n.keys[curKIdx] = child.RebalanceToTail(n.nodes[curNIdx+1])
 			}
 		}
-		drawChildren(0, n)
 		fmt.Println("finish remove")
 	}
 }

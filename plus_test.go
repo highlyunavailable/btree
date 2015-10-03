@@ -350,13 +350,48 @@ func TestTreeIter(t *testing.T) {
 	tree.Remove(&testKey{value: 3})
 	tree.Remove(&testKey{value: 6})
 	tree.Remove(&testKey{value: 12})
-	//drawChildren(0, tree.root)
-	//tree.Remove(&testKey{value: 52})
-	//tree.Remove(&testKey{value: 56})
-	//tree.Remove(&testKey{value: 60})
-	//tree.Remove(&testKey{value: 48})
-	//tree.Remove(&testKey{value: 36})
 	fmt.Println("--------------------------------------------")
 	drawChildren(0, tree.root)
 	fmt.Println("--------------------------------------------")
 }
+
+func BenchmarkTreeInsert(b *testing.B) {
+	randGen := rand.New(rand.NewSource(0))
+	tree := NewBTree(4)
+	for i := 0; i < b.N; i++ {
+		tree.Insert(&testKey{value: randGen.Intn(b.N)})
+	}
+}
+
+func BenchmarkTreeInsertSequential(b *testing.B) {
+	tree := NewBTree(4)
+	for i := 0; i < b.N; i++ {
+		tree.Insert(&testKey{value: b.N})
+	}
+}
+func BenchmarkTreeGet(b *testing.B) {
+	randGen := rand.New(rand.NewSource(0))
+	tree := NewBTree(4)
+	for i := 0; i < b.N; i++ {
+		tree.Insert(&testKey{value: randGen.Intn(b.N)})
+	}
+	b.ResetTimer()
+	randGen = rand.New(rand.NewSource(0))
+	for i := 0; i < b.N; i++ {
+		tree.Get(&testKey{value: randGen.Intn(b.N)})
+	}
+}
+
+//func BenchmarkTreeRemove(b *testing.B) {
+//  randGen := rand.New(rand.NewSource(0))
+//  tree := NewBTree(4)
+//  for i := 0; i < b.N; i++ {
+//    tree.Insert(&testKey{value: randGen.Intn(b.N)})
+//  }
+//  b.ResetTimer()
+//  randGen = rand.New(rand.NewSource(0))
+//  for i := 0; i < b.N; i++ {
+//    tree.Remove(&testKey{value: randGen.Intn(b.N)})
+//  }
+
+//}
